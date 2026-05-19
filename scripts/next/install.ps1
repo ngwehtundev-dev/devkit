@@ -173,7 +173,10 @@ function Install-NextDevKit {
     Assert-Command $PackageManager
   }
 
-  # ── Scaffold Next.js App ───────────────────────────────────────────────────
+  # ── Scaffold Next.js App (skip internal install) ──────────────────────────
+  # We pass --skip-install so create-next-app does NOT run pnpm install itself.
+  # This gives us a chance to patch package.json with the native build allowlist
+  # BEFORE pnpm ever runs — otherwise ERR_PNPM_IGNORED_BUILDS fires immediately.
 
   Write-Step "Scaffolding Next.js project: $ProjectName"
 
@@ -184,7 +187,8 @@ function Install-NextDevKit {
     --app `
     --src-dir `
     --import-alias "@/*" `
-    "--use-$PackageManager"
+    "--use-$PackageManager" `
+    --skip-install
 
   if ($LASTEXITCODE -ne 0) { Fail "create-next-app failed. See output above." }
 
@@ -218,6 +222,7 @@ function Install-NextDevKit {
     # pnpm 9+ blocks postinstall build scripts by default (supply-chain safety).
     # Packages like sharp and unrs-resolver compile native binaries and must be
     # explicitly opted in — otherwise pnpm raises ERR_PNPM_IGNORED_BUILDS.
+    # This MUST be written before the first `pnpm install` call.
 
     Write-Step "Configuring pnpm native build allowlist..."
 
@@ -246,13 +251,21 @@ function Install-NextDevKit {
     }
 
     # ── Install dependencies ─────────────────────────────────────────────────
+    # Now that package.json is patched, it's safe to run pnpm install.
 
     if (-not $NoInstall) {
-      Write-Step "Installing dependencies..."
-
       $DepArgs    = $DashboardDeps -join " "
       $DevDepArgs = $DevDeps -join " "
 
+      Write-Step "Running base install..."
+      switch ($PackageManager) {
+        "pnpm" { pnpm install }
+        "npm"  { npm install }
+        "bun"  { bun install }
+        "yarn" { yarn install }
+      }
+
+      Write-Step "Installing dashboard dependencies..."
       switch ($PackageManager) {
         "pnpm" {
           Invoke-Expression "pnpm add $DepArgs"
