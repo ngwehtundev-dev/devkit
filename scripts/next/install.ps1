@@ -218,20 +218,26 @@ function Install-NextDevKit {
 
   try {
 
-    # ── pnpm native build allowlist ──────────────────────────────────────────
-    # pnpm 9+ blocks postinstall build scripts by default (supply-chain safety).
-    # Packages like sharp and unrs-resolver compile native binaries and must be
-    # explicitly opted in — otherwise pnpm raises ERR_PNPM_IGNORED_BUILDS.
-    # This MUST be written before the first `pnpm install` call.
+    # ── pnpm native build allowlist ─────────────────────────────────────────
+    # pnpm 10 dropped the "pnpm" field from package.json — settings now live in
+    # pnpm-workspace.yaml. onlyBuiltDependencies must go there so pnpm allows
+    # sharp and unrs-resolver to compile native binaries; otherwise every install
+    # raises ERR_PNPM_IGNORED_BUILDS.
+    # Must be written BEFORE the first `pnpm install` call.
 
     Write-Step "Configuring pnpm native build allowlist..."
 
-    Edit-PackageJson {
-      param($Pkg)
-      $PnpmSection = [PSCustomObject]@{
-        onlyBuiltDependencies = $NativeBuildPackages
+    $WorkspaceFile = "pnpm-workspace.yaml"
+    $AllowLines    = @("", "onlyBuiltDependencies:") + ($NativeBuildPackages | ForEach-Object { "  - $_" })
+    $AllowBlock    = $AllowLines -join "`n"
+
+    if (Test-Path $WorkspaceFile) {
+      $Existing = Get-Content $WorkspaceFile -Raw
+      if ($Existing -notmatch "onlyBuiltDependencies") {
+        Add-Content $WorkspaceFile $AllowBlock
       }
-      $Pkg | Add-Member -Force -MemberType NoteProperty -Name "pnpm" -Value $PnpmSection
+    } else {
+      Set-Content $WorkspaceFile $AllowBlock
     }
 
     # ── Extra npm scripts ────────────────────────────────────────────────────
