@@ -1,4 +1,29 @@
 function Install-NextDevKit {
+  <#
+  .SYNOPSIS
+    Scaffold a production-ready Next.js dashboard project.
+
+  .PARAMETER ProjectName
+    Name of the project directory to create.
+
+  .PARAMETER Preset
+    Project preset to apply. Currently only "dashboard" is supported.
+
+  .PARAMETER Lang
+    Locale hint (en | mm). Reserved for future i18n preset support.
+
+  .PARAMETER PackageManager
+    Package manager to use: pnpm (default), npm, bun, or yarn.
+
+  .PARAMETER NoInstall
+    Skip dependency installation (scaffold files only).
+
+  .EXAMPLE
+    Install-NextDevKit my-app
+    Install-NextDevKit my-app -PackageManager bun -NoInstall
+  #>
+
+  [CmdletBinding()]
   param(
     [Parameter(Mandatory = $true, Position = 0)]
     [string]$ProjectName,
@@ -14,57 +39,28 @@ function Install-NextDevKit {
     [switch]$NoInstall
   )
 
+  # ── Constants ──────────────────────────────────────────────────────────────
+
   $ErrorActionPreference = "Stop"
-  $Repo = "ngwehtundev-dev/devkit"
-  $Branch = "main"
+
+  $Repo    = "ngwehtundev-dev/devkit"
+  $Branch  = "main"
   $BaseUrl = "https://raw.githubusercontent.com/$Repo/$Branch"
 
-  function Write-Step($Message) { Write-Host "▶ $Message" -ForegroundColor Cyan }
-  function Write-Success($Message) { Write-Host "✓ $Message" -ForegroundColor Green }
-  function Write-Warn($Message) { Write-Host "! $Message" -ForegroundColor Yellow }
-  function Fail($Message) { Write-Host "✗ $Message" -ForegroundColor Red; throw $Message }
-  function Test-Command($Command) { return [bool](Get-Command $Command -ErrorAction SilentlyContinue) }
-  function Require-Command($Command) { if (-not (Test-Command $Command)) { Fail "$Command is required but not installed." } }
-  function Download-File($RemotePath, $TargetPath) {
-    $Url = "$BaseUrl/$RemotePath"
-    $Dir = Split-Path $TargetPath -Parent
-    if ($Dir -and -not (Test-Path $Dir)) { New-Item -ItemType Directory -Force -Path $Dir | Out-Null }
-    Invoke-WebRequest -Uri $Url -OutFile $TargetPath
-  }
-  function Copy-TemplateFile($File) { Download-File "templates/next/$Preset/$File" "$ProjectName/$File" }
+  $DashboardDeps = @(
+    "zod",
+    "clsx",
+    "tailwind-merge",
+    "lucide-react",
+    "class-variance-authority"
+  )
 
-  Write-Host ""
-  Write-Host "Ngwe Htun DevKit" -ForegroundColor White
-  Write-Host "Professional Next.js dashboard installer" -ForegroundColor DarkGray
-  Write-Host ""
+  $DevDeps = @("prettier")
 
-  if ($Preset -ne "dashboard") { Fail "Only -Preset dashboard is supported in this version." }
-  if (Test-Path $ProjectName) { Fail "Directory already exists: $ProjectName" }
+  # Packages that compile native binaries and must be explicitly allowed by pnpm
+  $NativeBuildPackages = @("sharp", "unrs-resolver")
 
-  Write-Step "Checking required tools..."
-  Require-Command node
-  Require-Command npx
-
-  if (-not (Test-Command $PackageManager)) {
-    if ($PackageManager -eq "pnpm") {
-      Write-Warn "pnpm not found. Trying to enable Corepack..."
-      try { corepack enable | Out-Null; corepack prepare pnpm@latest --activate | Out-Null } catch { Write-Warn "Corepack setup failed." }
-    }
-  }
-  Require-Command $PackageManager
-
-  Write-Step "Creating Next.js dashboard project: $ProjectName"
-  npx create-next-app@latest $ProjectName `
-    --ts `
-    --tailwind `
-    --eslint `
-    --app `
-    --src-dir `
-    --import-alias "@/*" `
-    "--use-$PackageManager"
-
-  Write-Step "Creating dashboard folder structure..."
-  $Folders = @(
+  $FolderStructure = @(
     "src/app/(dashboard)/dashboard",
     "src/app/(dashboard)/settings",
     "src/app/api/health",
@@ -82,77 +78,234 @@ function Install-NextDevKit {
     "src/types",
     "src/utils"
   )
-  foreach ($Folder in $Folders) { New-Item -ItemType Directory -Force -Path "$ProjectName/$Folder" | Out-Null }
 
-  Write-Step "Applying dashboard preset files..."
-  Copy-TemplateFile "env.example"
-  Copy-TemplateFile "README.template.md"
-  Copy-TemplateFile "prettier.config.mjs"
-  Copy-TemplateFile ".prettierignore"
-  Copy-TemplateFile "src/app/(dashboard)/layout.tsx"
-  Copy-TemplateFile "src/app/(dashboard)/dashboard/page.tsx"
-  Copy-TemplateFile "src/app/(dashboard)/settings/page.tsx"
-  Copy-TemplateFile "src/app/api/health/route.ts"
-  Copy-TemplateFile "src/app/robots.ts"
-  Copy-TemplateFile "src/app/sitemap.ts"
-  Copy-TemplateFile "src/components/layout/dashboard-header.tsx"
-  Copy-TemplateFile "src/components/layout/dashboard-shell.tsx"
-  Copy-TemplateFile "src/components/layout/dashboard-sidebar.tsx"
-  Copy-TemplateFile "src/components/dashboard/stat-card.tsx"
-  Copy-TemplateFile "src/config/site.ts"
-  Copy-TemplateFile "src/lib/utils.ts"
-  Copy-TemplateFile "pnpm-workspace.yaml"
+  $TemplateFiles = @(
+    "env.example",
+    "README.template.md",
+    "prettier.config.mjs",
+    ".prettierignore",
+    "src/app/(dashboard)/layout.tsx",
+    "src/app/(dashboard)/dashboard/page.tsx",
+    "src/app/(dashboard)/settings/page.tsx",
+    "src/app/api/health/route.ts",
+    "src/app/robots.ts",
+    "src/app/sitemap.ts",
+    "src/components/layout/dashboard-header.tsx",
+    "src/components/layout/dashboard-shell.tsx",
+    "src/components/layout/dashboard-sidebar.tsx",
+    "src/components/dashboard/stat-card.tsx",
+    "src/config/site.ts",
+    "src/lib/utils.ts",
+    "pnpm-workspace.yaml"
+  )
 
-  Move-Item "$ProjectName/env.example" "$ProjectName/.env.example" -Force
-  Move-Item "$ProjectName/README.template.md" "$ProjectName/README.md" -Force
+  # ── Helpers ────────────────────────────────────────────────────────────────
+
+  function Write-Step($Message)    { Write-Host "▶ $Message" -ForegroundColor Cyan }
+  function Write-Success($Message) { Write-Host "✓ $Message" -ForegroundColor Green }
+  function Write-Warn($Message)    { Write-Host "! $Message" -ForegroundColor Yellow }
+  function Fail($Message)          { Write-Host "✗ $Message" -ForegroundColor Red; throw $Message }
+
+  function Test-CommandExists($Command) {
+    return [bool](Get-Command $Command -ErrorAction SilentlyContinue)
+  }
+
+  function Assert-Command($Command) {
+    if (-not (Test-CommandExists $Command)) {
+      Fail "$Command is required but was not found. Please install it and try again."
+    }
+  }
+
+  function Download-File($RemotePath, $TargetPath) {
+    $Url = "$BaseUrl/$RemotePath"
+    $Dir = Split-Path $TargetPath -Parent
+    if ($Dir -and -not (Test-Path $Dir)) {
+      New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+    }
+    Invoke-WebRequest -Uri $Url -OutFile $TargetPath -ErrorAction Stop
+  }
+
+  function Copy-TemplateFile($File) {
+    Download-File "templates/next/$Preset/$File" "$ProjectName/$File"
+  }
+
+  function Edit-PackageJson([scriptblock]$Mutate) {
+    $Json = Get-Content "package.json" -Raw | ConvertFrom-Json
+    & $Mutate $Json
+    $Json | ConvertTo-Json -Depth 20 | Set-Content "package.json"
+  }
+
+  # ── Banner ─────────────────────────────────────────────────────────────────
+
+  Write-Host ""
+  Write-Host "  Ngwe Htun DevKit" -ForegroundColor White
+  Write-Host "  Professional Next.js dashboard installer" -ForegroundColor DarkGray
+  Write-Host ""
+
+  # ── Validation ─────────────────────────────────────────────────────────────
+
+  if ($Preset -ne "dashboard") {
+    Fail "Only -Preset dashboard is supported in this version."
+  }
+
+  if (Test-Path $ProjectName) {
+    Fail "Directory already exists: $ProjectName. Choose a different project name."
+  }
+
+  # ── Prerequisites ──────────────────────────────────────────────────────────
+
+  Write-Step "Checking required tools..."
+
+  Assert-Command "node"
+  Assert-Command "npx"
+
+  if (-not (Test-CommandExists $PackageManager)) {
+    if ($PackageManager -eq "pnpm") {
+      Write-Warn "pnpm not found — attempting to enable via Corepack..."
+      try {
+        corepack enable | Out-Null
+        corepack prepare pnpm@latest --activate | Out-Null
+        Write-Success "pnpm activated via Corepack."
+      } catch {
+        Write-Warn "Corepack setup failed. Install pnpm manually: https://pnpm.io/installation"
+      }
+    }
+    Assert-Command $PackageManager
+  }
+
+  # ── Scaffold Next.js App ───────────────────────────────────────────────────
+
+  Write-Step "Scaffolding Next.js project: $ProjectName"
+
+  npx create-next-app@latest $ProjectName `
+    --ts `
+    --tailwind `
+    --eslint `
+    --app `
+    --src-dir `
+    --import-alias "@/*" `
+    "--use-$PackageManager"
+
+  if ($LASTEXITCODE -ne 0) { Fail "create-next-app failed. See output above." }
+
+  # ── Folder Structure ───────────────────────────────────────────────────────
+
+  Write-Step "Creating folder structure..."
+
+  foreach ($Folder in $FolderStructure) {
+    New-Item -ItemType Directory -Force -Path "$ProjectName/$Folder" | Out-Null
+  }
+
+  # ── Template Files ─────────────────────────────────────────────────────────
+
+  Write-Step "Applying $Preset preset files..."
+
+  foreach ($File in $TemplateFiles) {
+    Copy-TemplateFile $File
+  }
+
+  # Rename files that need to live at a different path than the template name
+  Move-Item "$ProjectName/env.example"        "$ProjectName/.env.example" -Force
+  Move-Item "$ProjectName/README.template.md" "$ProjectName/README.md"    -Force
+
+  # ── Enter project dir ──────────────────────────────────────────────────────
 
   Push-Location $ProjectName
 
-  if (-not $NoInstall) {
-    Write-Step "Installing dashboard dependencies..."
-    switch ($PackageManager) {
-      "pnpm" { pnpm add zod clsx tailwind-merge lucide-react class-variance-authority; pnpm add -D prettier }
-      "npm" { npm install zod clsx tailwind-merge lucide-react class-variance-authority; npm install -D prettier }
-      "bun" { bun add zod clsx tailwind-merge lucide-react class-variance-authority; bun add -d prettier }
-      "yarn" { yarn add zod clsx tailwind-merge lucide-react class-variance-authority; yarn add -D prettier }
+  try {
+
+    # ── pnpm native build allowlist ──────────────────────────────────────────
+    # pnpm 9+ blocks postinstall build scripts by default (supply-chain safety).
+    # Packages like sharp and unrs-resolver compile native binaries and must be
+    # explicitly opted in — otherwise pnpm raises ERR_PNPM_IGNORED_BUILDS.
+
+    Write-Step "Configuring pnpm native build allowlist..."
+
+    Edit-PackageJson {
+      param($Pkg)
+      $PnpmSection = [PSCustomObject]@{
+        onlyBuiltDependencies = $NativeBuildPackages
+      }
+      $Pkg | Add-Member -Force -MemberType NoteProperty -Name "pnpm" -Value $PnpmSection
     }
-  } else {
-    Write-Warn "Dependency installation skipped."
+
+    # ── Extra npm scripts ────────────────────────────────────────────────────
+
+    Write-Step "Updating package.json scripts..."
+
+    Edit-PackageJson {
+      param($Pkg)
+      if (-not $Pkg.scripts) {
+        $Pkg | Add-Member -MemberType NoteProperty -Name "scripts" -Value ([PSCustomObject]@{})
+      }
+      $Scripts = $Pkg.scripts
+      $Scripts | Add-Member -Force -MemberType NoteProperty -Name "typecheck"    -Value "tsc --noEmit"
+      $Scripts | Add-Member -Force -MemberType NoteProperty -Name "format"       -Value "prettier --write ."
+      $Scripts | Add-Member -Force -MemberType NoteProperty -Name "format:check" -Value "prettier --check ."
+      $Scripts | Add-Member -Force -MemberType NoteProperty -Name "check"        -Value "npm run lint && npm run typecheck && npm run format:check"
+    }
+
+    # ── Install dependencies ─────────────────────────────────────────────────
+
+    if (-not $NoInstall) {
+      Write-Step "Installing dependencies..."
+
+      $DepArgs    = $DashboardDeps -join " "
+      $DevDepArgs = $DevDeps -join " "
+
+      switch ($PackageManager) {
+        "pnpm" {
+          Invoke-Expression "pnpm add $DepArgs"
+          Invoke-Expression "pnpm add -D $DevDepArgs"
+        }
+        "npm" {
+          Invoke-Expression "npm install $DepArgs"
+          Invoke-Expression "npm install -D $DevDepArgs"
+        }
+        "bun" {
+          Invoke-Expression "bun add $DepArgs"
+          Invoke-Expression "bun add -d $DevDepArgs"
+        }
+        "yarn" {
+          Invoke-Expression "yarn add $DepArgs"
+          Invoke-Expression "yarn add -D $DevDepArgs"
+        }
+      }
+    } else {
+      Write-Warn "Dependency installation skipped (-NoInstall)."
+    }
+
+  } finally {
+    Pop-Location
   }
 
-  Write-Step "Updating package scripts..."
-  $Pkg = Get-Content "package.json" -Raw | ConvertFrom-Json
-  if (-not $Pkg.scripts) { $Pkg | Add-Member -MemberType NoteProperty -Name scripts -Value ([PSCustomObject]@{}) }
-  $Pkg.scripts | Add-Member -Force -MemberType NoteProperty -Name "typecheck" -Value "tsc --noEmit"
-  $Pkg.scripts | Add-Member -Force -MemberType NoteProperty -Name "format" -Value "prettier --write ."
-  $Pkg.scripts | Add-Member -Force -MemberType NoteProperty -Name "format:check" -Value "prettier --check ."
-  $Pkg.scripts | Add-Member -Force -MemberType NoteProperty -Name "check" -Value "npm run lint && npm run typecheck && npm run format:check"
-  $Pkg | ConvertTo-Json -Depth 20 | Set-Content "package.json"
+  # ── Summary ────────────────────────────────────────────────────────────────
 
-  Pop-Location
-
-  Write-Success "Dashboard project created successfully."
   Write-Host ""
-  Write-Host "Summary" -ForegroundColor White
-  Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  Write-Host "Project:          $ProjectName"
-  Write-Host "Preset:           $Preset"
-  Write-Host "Package Manager:  $PackageManager"
-  Write-Host "Language:         $Lang"
+  Write-Success "Project created successfully!"
   Write-Host ""
-  Write-Host "Included:"
-  Write-Host "  ✓ Next.js App Router"
-  Write-Host "  ✓ TypeScript"
-  Write-Host "  ✓ Tailwind CSS"
-  Write-Host "  ✓ Dashboard layout"
-  Write-Host "  ✓ Sidebar + header shell"
-  Write-Host "  ✓ Dashboard + settings pages"
-  Write-Host "  ✓ Health check route"
-  Write-Host "  ✓ SEO starter files"
-  Write-Host "  ✓ Environment example"
+  Write-Host "  Summary" -ForegroundColor White
+  Write-Host "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  Write-Host "  Project:         $ProjectName"
+  Write-Host "  Preset:          $Preset"
+  Write-Host "  Package Manager: $PackageManager"
+  Write-Host "  Language:        $Lang"
   Write-Host ""
-  Write-Host "Next steps:"
-  Write-Host "  cd $ProjectName"
-  Write-Host "  $PackageManager dev"
+  Write-Host "  Included:"
+  Write-Host "    ✓ Next.js App Router"
+  Write-Host "    ✓ TypeScript"
+  Write-Host "    ✓ Tailwind CSS"
+  Write-Host "    ✓ Dashboard layout"
+  Write-Host "    ✓ Sidebar + header shell"
+  Write-Host "    ✓ Dashboard + settings pages"
+  Write-Host "    ✓ Health check route"
+  Write-Host "    ✓ SEO starter files"
+  Write-Host "    ✓ Environment example"
+  Write-Host "    ✓ Prettier config"
+  Write-Host "    ✓ pnpm native build allowlist"
+  Write-Host ""
+  Write-Host "  Next steps:"
+  Write-Host "    cd $ProjectName"
+  Write-Host "    $PackageManager dev"
   Write-Host ""
 }
