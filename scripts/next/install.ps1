@@ -96,7 +96,7 @@ function Install-NextDevKit {
     "src/components/dashboard/stat-card.tsx",
     "src/config/site.ts",
     "src/lib/utils.ts",
-    "pnpm-workspace.yaml"
+    # pnpm-workspace.yaml is generated directly by the script (see allowlist step)
   )
 
   # ── Helpers ────────────────────────────────────────────────────────────────
@@ -219,26 +219,22 @@ function Install-NextDevKit {
   try {
 
     # ── pnpm native build allowlist ─────────────────────────────────────────
-    # pnpm 10 dropped the "pnpm" field from package.json — settings now live in
-    # pnpm-workspace.yaml. onlyBuiltDependencies must go there so pnpm allows
-    # sharp and unrs-resolver to compile native binaries; otherwise every install
-    # raises ERR_PNPM_IGNORED_BUILDS.
-    # Must be written BEFORE the first `pnpm install` call.
+    # pnpm 10 removed the "pnpm" key from package.json entirely. The correct
+    # home is pnpm-workspace.yaml. We generate this file from scratch so we
+    # own the content — no template append, no CRLF/guard issues.
+    # Must exist BEFORE the first `pnpm install` call.
 
     Write-Step "Configuring pnpm native build allowlist..."
 
-    $WorkspaceFile = "pnpm-workspace.yaml"
-    $AllowLines    = @("", "onlyBuiltDependencies:") + ($NativeBuildPackages | ForEach-Object { "  - $_" })
-    $AllowBlock    = $AllowLines -join "`n"
+    $AllowEntries  = ($NativeBuildPackages | ForEach-Object { "  - $_" }) -join "`n"
+    $WorkspaceYaml = "onlyBuiltDependencies:`n$AllowEntries`n"
 
-    if (Test-Path $WorkspaceFile) {
-      $Existing = Get-Content $WorkspaceFile -Raw
-      if ($Existing -notmatch "onlyBuiltDependencies") {
-        Add-Content $WorkspaceFile $AllowBlock
-      }
-    } else {
-      Set-Content $WorkspaceFile $AllowBlock
-    }
+    # Use UTF-8 without BOM and LF line endings so pnpm's YAML parser is happy
+    [System.IO.File]::WriteAllText(
+      (Resolve-Path "." | Join-Path -ChildPath "pnpm-workspace.yaml"),
+      $WorkspaceYaml,
+      [System.Text.UTF8Encoding]::new($false)
+    )
 
     # ── Extra npm scripts ────────────────────────────────────────────────────
 
