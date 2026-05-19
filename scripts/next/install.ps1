@@ -101,6 +101,7 @@ function Install-NextDevKit {
   Copy-TemplateFile "src/components/dashboard/stat-card.tsx"
   Copy-TemplateFile "src/config/site.ts"
   Copy-TemplateFile "src/lib/utils.ts"
+  Copy-TemplateFile "pnpm-workspace.yaml"
 
   Move-Item "$ProjectName/env.example" "$ProjectName/.env.example" -Force
   Move-Item "$ProjectName/README.template.md" "$ProjectName/README.md" -Force

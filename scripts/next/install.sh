@@ -121,6 +121,8 @@ copy_template_file "src/components/layout/dashboard-sidebar.tsx"
 copy_template_file "src/components/dashboard/stat-card.tsx"
 copy_template_file "src/config/site.ts"
 copy_template_file "src/lib/utils.ts"
+copy_template_file "pnpm-workspace.yaml"
+
 
 mv "${PROJECT_NAME}/env.example" "${PROJECT_NAME}/.env.example"
 mv "${PROJECT_NAME}/README.template.md" "${PROJECT_NAME}/README.md"
